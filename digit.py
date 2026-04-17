@@ -2,12 +2,12 @@ import telebot
 import requests
 import time
 import os
+import math
 from datetime import datetime, timedelta, timezone
 
 # ========== CONFIGURATION ========== 
 BOT_TOKEN = '8685736939:AAGbzSlibDslZRl6nJEhWkJqk9oBIRtMnjw'
 CHANNEL_ID = '-1003770494230'
-
 
 API_URL = "https://draw.ar-lottery01.com/TrxWinGo/TrxWinGo_1M/GetHistoryIssuePage.json"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -31,68 +31,174 @@ state = {
 def get_mm_time():
     return datetime.now(timezone.utc) + timedelta(hours=6, minutes=30)
 
-# --- ၁။ AUTO PATTERN ANALYZER (Unified Logic) ---
+# --- ၁။ 100% IDENTICAL 5 GENERATORS LOGIC (JS -> Python Port) ---
 
-def algo_dynamic_pattern(history_list):
-    """
-    Data အဟောင်းတွေထဲကနေ လက်ရှိ ၂ လုံးတွဲ / ၃ လုံးတွဲ Pattern ကိုရှာပြီး 
-    Win Rate အများဆုံး (၇၀% အထက်) သေချာမှသာ ခန့်မှန်းပေးမယ့် Logic
-    """
-    nums = [int(x['number']) for x in history_list]
-    if len(nums) < 4: return None, "Not enough data"
+def to_int32(n):
+    """ JavaScript ရဲ့ 32-bit Signed Integer ကို ပုံတူကူးခြင်း """
+    n = n & 0xFFFFFFFF
+    return n | (-(n & 0x80000000))
 
-    # လက်ရှိ နောက်ဆုံးထွက်ထားတဲ့ Sequence တွေ
-    target_3 = [nums[0], nums[1], nums[2]]
-    target_2 = [nums[0], nums[1]]
+def make_seed(period_str):
+    """ JS ရှိ makeSeed(period) နှင့် ၁၀၀% ထပ်တူ """
+    seed = 0
+    for char in period_str:
+        s32 = to_int32(seed)
+        shifted = to_int32(s32 << 5)
+        subtracted = to_int32(shifted - s32)
+        seed = to_int32(subtracted + ord(char))
+    return (seed & 0xFFFFFFFF) + 1
 
-    # (၁) ၃ လုံးတွဲ Pattern ကို အရင်စစ်မယ်
-    b_count_3, s_count_3 = 0, 0
-    for i in range(1, len(nums) - 3):
-        if [nums[i], nums[i+1], nums[i+2]] == target_3:
-            outcome = nums[i-1] # Pattern ပြီးနောက် ထွက်ခဲ့တဲ့ ရလဒ်
-            if outcome >= 5: b_count_3 += 1
-            else: s_count_3 += 1
+class MersenneTwister:
+    """ JS ရှိ Custom Mersenne Twister နှင့် ၁၀၀% ထပ်တူ """
+    def __init__(self, seed):
+        self.N = 624
+        self.M = 397
+        self.MATRIX_A = 0x9908b0df
+        self.UPPER_MASK = 0x80000000
+        self.LOWER_MASK = 0x7fffffff
+        self.mt = [0] * self.N
+        self.mti = self.N + 1
+        self.init_seed(seed)
 
-    total_3 = b_count_3 + s_count_3
-    if total_3 >= 2: # အရင်က အနည်းဆုံး ၂ ကြိမ် ထွက်ဖူးမှ တွက်မယ်
-        b_pct = (b_count_3 / total_3) * 100
-        s_pct = (s_count_3 / total_3) * 100
-        seq_str = f"[{nums[2]},{nums[1]},{nums[0]}]"
-        # Winrate 75% အထက်ရှိမှ ယူမယ်
-        if b_pct >= 75: return "BIG", f"3-Digit {seq_str} ({b_pct:.0f}%)"
-        if s_pct >= 75: return "SMALL", f"3-Digit {seq_str} ({s_pct:.0f}%)"
+    def init_seed(self, seed):
+        self.mt[0] = seed & 0xFFFFFFFF
+        for self.mti in range(1, self.N):
+            s = self.mt[self.mti-1] ^ (self.mt[self.mti-1] >> 30)
+            part1 = (((s & 0xffff0000) >> 16) * 1812433253) << 16
+            part2 = (s & 0xffff) * 1812433253
+            self.mt[self.mti] = (part1 + part2 + self.mti) & 0xFFFFFFFF
 
-    # (၂) ၃ လုံးတွဲ သိပ်မသေချာရင် ၂ လုံးတွဲ ဆက်စစ်မယ်
-    b_count_2, s_count_2 = 0, 0
-    for i in range(1, len(nums) - 2):
-        if [nums[i], nums[i+1]] == target_2:
-            outcome = nums[i-1]
-            if outcome >= 5: b_count_2 += 1
-            else: s_count_2 += 1
+    def generate(self):
+        for kk in range(self.N - self.M):
+            y = (self.mt[kk] & self.UPPER_MASK) | (self.mt[kk+1] & self.LOWER_MASK)
+            self.mt[kk] = self.mt[kk+self.M] ^ (y >> 1) ^ (self.MATRIX_A if y & 1 else 0)
+        for kk in range(self.N - self.M, self.N - 1):
+            y = (self.mt[kk] & self.UPPER_MASK) | (self.mt[kk+1] & self.LOWER_MASK)
+            self.mt[kk] = self.mt[kk+(self.M-self.N)] ^ (y >> 1) ^ (self.MATRIX_A if y & 1 else 0)
+        y = (self.mt[self.N-1] & self.UPPER_MASK) | (self.mt[0] & self.LOWER_MASK)
+        self.mt[self.N-1] = self.mt[self.M-1] ^ (y >> 1) ^ (self.MATRIX_A if y & 1 else 0)
+        self.mti = 0
+
+    def nextInt(self):
+        if self.mti >= self.N:
+            self.generate()
+        y = self.mt[self.mti]
+        self.mti += 1
+        y ^= (y >> 11)
+        y ^= (y << 7) & 0x9d2c5680
+        y ^= (y << 15) & 0xefc60000
+        y ^= (y >> 18)
+        return y & 0xFFFFFFFF
+
+    def nextDouble(self):
+        return self.nextInt() * (1.0 / 4294967296.0)
+
+    def predict(self):
+        return "SMALL" if self.nextDouble() < 0.5 else "BIG"
+
+class LCG:
+    def __init__(self, seed):
+        self.state = seed if seed else 123456789
+    def predict(self):
+        self.state = (self.state * 1103515245 + 12345) & 0x7FFFFFFF
+        val = self.state / 0x7FFFFFFF
+        return "SMALL" if val < 0.5 else "BIG"
+
+class WichmannHill:
+    def __init__(self, seed):
+        self.s1 = (seed % 30269) or 12345
+        self.s2 = (seed % 30307) or 23456
+        self.s3 = (seed % 30323) or 34567
+    def predict(self):
+        self.s1 = (171 * self.s1) % 30269
+        self.s2 = (172 * self.s2) % 30307
+        self.s3 = (170 * self.s3) % 30323
+        val = (self.s1/30269.0 + self.s2/30307.0 + self.s3/30323.0) % 1.0
+        return "SMALL" if val < 0.5 else "BIG"
+
+class ACORN:
+    def __init__(self, seed, order=8):
+        self.order = order
+        self.state = [0] * (order + 1)
+        m = 2**30
+        self.state[0] = seed % m
+        for i in range(1, order + 1):
+            self.state[i] = (self.state[i-1] + seed) % m
+    def predict(self):
+        m = 2**30
+        self.state[0] = (self.state[0] + 1) % m
+        for i in range(1, self.order + 1):
+            self.state[i] = (self.state[i] + self.state[i-1]) % m
+        val = self.state[self.order] / m
+        return "SMALL" if val < 0.5 else "BIG"
+
+class BCN:
+    def __init__(self, seed):
+        self.state = seed if seed else 12345
+    def predict(self):
+        self.state = (self.state * 1664525 + 1013904223) & 0xFFFFFFFF
+        x = self.state / 0xFFFFFFFF
+        r = (x + math.sin(self.state)*0.3 + math.cos(self.state*0.7)*0.2) % 1.0
+        val = -r if r < 0 else r
+        return "SMALL" if val < 0.5 else "BIG"
+
+def get_all_predictions(period_str):
+    seed = make_seed(period_str)
+    return {
+        "MT": MersenneTwister(seed).predict(),
+        "LCG": LCG(seed).predict(),
+        "WH": WichmannHill(seed).predict(),
+        "ACORN": ACORN(seed).predict(),
+        "BCN": BCN(seed).predict()
+    }
+
+def evaluate_best_method(history_list):
+    """ API Data ၅၀ ပေါ်တွင် စမ်းသပ်ပြီး WinRate အများဆုံး AI ကို ရွေးချယ်ခြင်း """
+    stats = {
+        "MT": {"correct": 0, "total": 0},
+        "LCG": {"correct": 0, "total": 0},
+        "WH": {"correct": 0, "total": 0},
+        "ACORN": {"correct": 0, "total": 0},
+        "BCN": {"correct": 0, "total": 0}
+    }
+    
+    for item in history_list:
+        period = str(item['issueNumber'])
+        num = int(item['number'])
+        actual_size = "BIG" if num >= 5 else "SMALL"
+        
+        preds = get_all_predictions(period)
+        for method, pred in preds.items():
+            if pred == actual_size:
+                stats[method]["correct"] += 1
+            stats[method]["total"] += 1
             
-    total_2 = b_count_2 + s_count_2
-    if total_2 >= 3: # အရင်က အနည်းဆုံး ၃ ကြိမ် ထွက်ဖူးမှ တွက်မယ်
-        b_pct = (b_count_2 / total_2) * 100
-        s_pct = (s_count_2 / total_2) * 100
-        seq_str = f"[{nums[1]},{nums[0]}]"
-        # Winrate 70% အထက်ရှိမှ ယူမယ်
-        if b_pct >= 70: return "BIG", f"2-Digit {seq_str} ({b_pct:.0f}%)"
-        if s_pct >= 70: return "SMALL", f"2-Digit {seq_str} ({s_pct:.0f}%)"
-
-    # Winrate နည်းနေရင် / Pattern မမိရင်
-    return None, "Weak Trend (SKIP)"
+    best_method = "MT"
+    best_acc = -1
+    
+    for method, data in stats.items():
+        acc = (data["correct"] / data["total"]) * 100 if data["total"] > 0 else 0
+        if acc > best_acc:
+            best_acc = acc
+            best_method = method
+            
+    return best_method, best_acc
 
 def get_prediction(history_data):
     try:
         data_list = sorted(history_data, key=lambda x: int(x['issueNumber']), reverse=True)
         latest = data_list[0]
+        next_p = str(int(latest['issueNumber']) + 1)
         
-        side, p_type = algo_dynamic_pattern(data_list) 
+        best_method, best_acc = evaluate_best_method(data_list)
         
-        if side is None:
-            return "SKIP", 0, p_type, latest.get('blockNumber')
-            
-        return side, 100, p_type, latest.get('blockNumber')
+        preds = get_all_predictions(next_p)
+        side = preds[best_method]
+        
+        note = f"Used: {best_method} ({best_acc:.0f}% historical)"
+        conf = int(best_acc)
+        
+        return side, conf, note, latest.get('blockNumber')
     except Exception as e:
         return None, 0, f"Error: {e}", None
 
@@ -118,7 +224,7 @@ def build_live_msg(remaining_sec):
     win_rate = (state["total_wins"] / total * 100) if total > 0 else 0
     curr = state['current_prediction']
     
-    msg = f"<b>🍁GLOBAL TRX LIVE - AUTO PATTERN BOT</b>\n"
+    msg = f"<b>🍁GLOBAL TRX LIVE - ZX WIN AI</b>\n"
     msg += f"🍁ʜɪꜱᴛᴏʀʏ: <b>W-{state['total_wins']} | L-{state['total_losses']}</b>\n"
     msg += f"🍁ᴡɪɴʀᴀᴛᴇ: <b>{win_rate:.1f}%</b> \n"    
     msg += f"🍁ᴛɪᴍᴇ ʀᴇᴍᴀɪɴɪɴɢ: <b>{remaining_sec}s</b>\n"
@@ -154,12 +260,8 @@ def build_live_msg(remaining_sec):
     msg += f"<pre>{table}</pre>"
         
     msg += f"🍁ᴘᴇʀɪᴏᴅ: {curr['period_full'][-17:] if curr['period_full'] else '----'}\n"
-    if curr['side'] == "SKIP":
-        msg += f"🍁ᴘʀᴇᴅɪᴄᴛɪᴏɴ: <b>SKIP ⏸</b> \n"
-    else:
-        msg += f"🍁ᴘʀᴇᴅɪᴄᴛɪᴏɴ: <b>{curr['side'] or 'WAITING'}</b> \n"
-        
-    msg += f"🍁ʟᴏɢɪᴄ ᴜsᴇᴅ: <i>{curr['note']}</i>\n"
+    msg += f"🍁ᴘʀᴇᴅɪᴄᴛɪᴏɴ: <b>{curr['side'] or 'WAITING'}</b>\n"
+    msg += f"🍁ʟᴏɢɪᴄ: <i>{curr['note']}</i>\n"
     msg += f"🍁ᴄʀᴇᴀᴛᴏʀ: @XQNSY"
 
     return msg
@@ -178,13 +280,12 @@ def build_loss_msg():
 # --- ၄။ MAIN LOOP ---
 
 def main_loop():
-    print("Bot starting with Unified Auto Pattern Analyzer (70%+ Winrate filter)...")
+    print("Bot starting... 100% Identical to pro.html (MT, LCG, WH, ACORN, BCN)")
     state["last_day"] = get_mm_time().strftime("%d,%m,%Y")
     
     while True:
         try:
-            # Pattern ပြန်ရှာဖို့ API ကနေ Data ၁၅၀ ယူပါမယ်
-            res = requests.get(f"{API_URL}?pageSize=150&pageNo=1&ts={int(time.time())}", headers=HEADERS, timeout=15)
+            res = requests.get(f"{API_URL}?pageSize=50&pageNo=1&ts={int(time.time())}", headers=HEADERS, timeout=15)
             if res.status_code == 200:
                 data = res.json().get('data', {}).get('list', [])
                 for i in data: state["history"][i['issueNumber']] = i
